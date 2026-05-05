@@ -46,7 +46,7 @@ taskkill /F /IM brave.exe >nul 2>&1
 taskkill /F /IM msedge.exe >nul 2>&1
 taskkill /F /IM opera.exe >nul 2>&1
 taskkill /F /IM vivaldi.exe >nul 2>&1
-timeout /t 2 /nobreak >nul
+timeout /t 1 /nobreak >nul
 
 :: Restart all browsers
 start "" chrome.exe >nul 2>&1
